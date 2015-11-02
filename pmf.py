@@ -50,6 +50,7 @@ class PMF(object):
             make user_id and item_id start from zero
         '''
         self.ratings_vector = np.loadtxt(self.ratings_file,delimiter=' ')
+        self.ratings_vector = self.ratings_vector[:100000]
         #self.vali_vectors = np.loadtxt(self.vali_file)
 
     def generate_normalized_ratings(self):
@@ -75,8 +76,8 @@ class PMF(object):
         ratings = self.generate_normalized_ratings()
         ratings_vector[:,2] = ratings
 
-
         sigmod_f = np.vectorize(lambda x: 1.0/(1+pow(math.e, -x)))
+        sigmod_d = np.vectorize(lambda x: sigmod_der(x))
         #rating = sigmod(rating)
         #print rating[:10]
 
@@ -87,9 +88,11 @@ class PMF(object):
         for epoch in range(1, self.max_epoch):
 
             round_start = time.time()
-            #####compute predictions####
-            pred_out = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))#|R| * K --> |R| * 1
 
+            U_V_pairwise = np.multiply(self.U[user_inds,:], self.V[item_inds,:])
+
+            #####compute predictions####
+            pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
 
             err_f = 0.5 * (np.square(pred_out - ratings).sum() + 0.5 * self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
 
@@ -99,28 +102,99 @@ class PMF(object):
             if pre_err - cur_err < 10:
                 break
 
+            pred_time = time.time()
             #####calculate the gradients#####
 
             grad_u = np.zeros(self.U_shape)
             grad_v = np.zeros(self.V_shape)
 
+            ####update gradient
+            U_mat = np.zeros((self.user_num, self.tr_num))
+            V_mat = np.zeros((self.item_num, self.tr_num))
+            sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
+            sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
+            U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.tr_num, 1)
+            delta_matrix = np.tile(U_V_delta, self.feat_num)
+            delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
+            delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
+            dot_time = time.time()
+
+            '''
+            #bad practice, as U_mat is |U| * |R|, delta_U is |R| * |D|, which makes dot product so expensive
+            #when choose just 10000 observations, the time cost is "time detail: 1s/0s/49s/52s"
+            time1 = time.time()
+            for uid in range(int(self.user_num)):
+                U_mat[uid] = np.equal(uid, user_inds).astype(dtype=int)
+
+            time2 = time.time()
+            grad_u += np.dot(U_mat, delta_U)
+
+            time3 = time.time()
+            for vid in range(int(self.item_num)):
+                V_mat[vid] = np.equal(vid, item_inds).astype(dtype=int)
+
+            time4 = time.time()
+            grad_v += np.dot(V_mat, delta_V)
+
+            time5 = time.time()
+            print 'time detail: %.1fs/%.1fs/%.1fs/%.1fs' % (time2 - time1, time3-time2, time4-time3, time5-time4)
+            '''
+
+            '''
+            ind = 0
+            for uid, vid, r in ratings_vector:
+                uid -= 1
+                vid -= 1
+                grad_u[uid] +=  delta_U[ind]
+                grad_v[vid] +=  delta_V[ind]
+                ind += 1
+            '''
+
+            accumulate_time = time.time()
+
+            print 'dot/accumulate cost %.1fs/%.1fs' % (dot_time - pred_time, accumulate_time - dot_time)
+            '''
+            pred_out = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))#|R| * K --> |R| * 1
+            dot_time = 0.0
+            calculus_time = 0.0
+            add_delta_time = 0.0
             for uid, vid, r in ratings_vector:
                 uid -= 1
                 vid -= 1
 
-                grad_u[uid] += sigmod_der(np.dot(self.U[uid], self.V[vid])) * (sigmod(np.dot(self.U[uid], self.V[vid])) - r) * self.V[vid]
-                grad_v[vid] += sigmod_der(np.dot(self.U[uid], self.V[vid])) * (sigmod(np.dot(self.U[uid], self.V[vid])) - r) * self.U[uid]
+                dot_start = time.time()
+                u_v_dot = np.dot(self.U[uid], self.V[vid])
+                dot_end = time.time()
+                dot_time += (dot_end - dot_start)
+
+                cal_start = time.time()
+                first_der = sigmod(u_v_dot)
+                second_der = sigmod_der(u_v_dot)
+                cal_end = time.time()
+                calculus_time += (cal_end - cal_start)
+
+                add_delta_start = time.time()
+                delta = second_der * (first_der - r)
+                grad_u[uid] +=  delta * self.V[vid]
+                grad_v[vid] +=  delta * self.U[uid]
                 #grad_v[vid] += (np.dot(self.U[uid], self.V[vid]) - r) * self.U[uid]
+                add_delta_end = time.time()
+                add_delta_time += (add_delta_end - add_delta_start)
+
+            print 'cost detail: u_v_dot=%.1fs, calculus=%.1fs, add_delta=%.1fs' % (dot_time, calculus_time, add_delta_time)
+            '''
 
             grad_u += self.lamb * self.U
             grad_v += self.lamb * self.V
+            cal_grad_time = time.time()
 
             #####update the U and V vectors
             self.U -= self.epsilon * grad_u / math.sqrt(np.square(grad_u).sum())
             self.V -= self.epsilon * grad_v / math.sqrt(np.square(grad_v).sum())
             round_end = time.time()
 
-            print '%s iterations, train error=%s, cost %.1fs' % (epoch, err_f, round_end - round_start)
+            print '%s iterations, train error=%s, cost(gradient/round) %.1fs/%.1fs' \
+                    % (epoch, err_f, cal_grad_time - pred_time, round_end - round_start)
 
         print 'training ended, cost %.2fmin' % ((time.time() - train_start) / 60.0)
 
