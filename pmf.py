@@ -111,9 +111,8 @@ class PMF(object):
             grad_u = np.zeros(self.U_shape)
             grad_v = np.zeros(self.V_shape)
 
+
             ####update gradient
-            #U_mat = np.zeros((self.user_num, self.tr_num))
-            #V_mat = np.zeros((self.item_num, self.tr_num))
             sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
             sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
             U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1)
@@ -122,8 +121,22 @@ class PMF(object):
             delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
             dot_time = time.time()
 
+            ind = 0
+            for uid, vid, r in self.train_vector:
+                uid -= 1
+                vid -= 1
+                grad_u[uid] +=  delta_U[ind]
+                grad_v[vid] +=  delta_V[ind]
+                ind += 1
+
+            accumulate_time = time.time()
+
+            logging.info('dot/accumulate cost %.1fs/%.1fs', dot_time - pred_time, accumulate_time - dot_time)
 
             '''
+            ##############
+            #U_mat = np.zeros((self.user_num, self.tr_num))
+            #V_mat = np.zeros((self.item_num, self.tr_num))
             sparse_V_mat = sparse.csr_matrix(V_mat)
             sparse_delta_V = sparse.csr_matrix(delta_V)
             #bad practice, as U_mat is |U| * |R|, delta_U is |R| * |D|, which makes dot product so expensive
@@ -145,25 +158,15 @@ class PMF(object):
 
             time5 = time.time()
             print 'time detail: %.1fs/%.1fs/%.1fs/%.1fs' % (time2 - time1, time3-time2, time4-time3, time5-time4)
+            ##################
             '''
-
-            ind = 0
-            for uid, vid, r in self.train_vector:
-                uid -= 1
-                vid -= 1
-                grad_u[uid] +=  delta_U[ind]
-                grad_v[vid] +=  delta_V[ind]
-                ind += 1
-
-            accumulate_time = time.time()
-
-            logging.info('dot/accumulate cost %.1fs/%.1fs', dot_time - pred_time, accumulate_time - dot_time)
             '''
+            ##########
             pred_out = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))#|R| * K --> |R| * 1
             dot_time = 0.0
             calculus_time = 0.0
             add_delta_time = 0.0
-            for uid, vid, r in ratings_vector:
+            for uid, vid, r in self.train_vector:
                 uid -= 1
                 vid -= 1
 
@@ -187,6 +190,7 @@ class PMF(object):
                 add_delta_time += (add_delta_end - add_delta_start)
 
             print 'cost detail: u_v_dot=%.1fs, calculus=%.1fs, add_delta=%.1fs' % (dot_time, calculus_time, add_delta_time)
+            ##########
             '''
 
             grad_u += self.lamb * self.U
