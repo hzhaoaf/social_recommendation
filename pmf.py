@@ -66,7 +66,6 @@ class PMF(object):
         '''
         self.ratings_vector = np.loadtxt(self.ratings_file,delimiter=' ')
 
-
     def generate_normalized_ratings(self):
         '''
             mapping the rating 1,...,K to [0, 1] by the formula r = (x - 1) / (K - 1)
@@ -231,29 +230,6 @@ class PMF(object):
         self.train()
         self.predict()
         self.evaluate()
-
-    def batch_train(self):
-
-        for epoch in range(1, self.max_epoch):
-            rand_inds = np.random.permutation(self.tr_num)
-            ratings_vector = self.ratings_vector[rand_inds,:]
-            del rand_inds
-
-            for batch in range(1, self.batch_num):
-                print 'epoch %s batch %d' % (epoch, batch)
-                N = 10000
-
-                aa_p =  ratings_vector[(batch-1)*N:batch*N+1,0]
-                aa_m =  ratings_vector[(batch-1)*N:batch*N+1,1]
-
-                rating =  ratings_vector[(batch-1)*N:batch*N+1,2]
-
-                rating = rating - self.mean_rating # set mean to 0 ?
-
-                ####compute predictions####
-                pred_out = np.multiply(self.U[aa_u,:], self.V[aa_v,:]).sum(axis=1) # sum by column
-
-                f = np.square(pred_out - rating)
 
 if __name__ == '__main__':
     pmf = PMF()
