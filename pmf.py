@@ -30,6 +30,30 @@ class PMF(object):
         self.obs_num = self.ratings_vector.shape[0]
 
         self.generate_normalized_ratings()
+        self.split_data()
+
+        self.epsilon = 0.5; #learning rate
+        self.lamb = 0.01 #Regularization parameter
+        self.momentum = 0.8
+        self.max_epoch = 400 #iteration
+        self.feat_num = 5
+
+        #uid, vid以observation里出现的uid为准, 如何划分数据也是一个问题
+        self.user_num = self.ratings_vector[:,0].max()
+        self.item_num = self.ratings_vector[:,1].max()
+
+        self.U_shape = (self.user_num, self.feat_num)
+        self.V_shape = (self.item_num, self.feat_num)
+
+        #U: matrix of user features, V: matrix of item features, generated from gaussian distribution
+        self.U = np.random.standard_normal(self.U_shape)
+        self.V = np.random.standard_normal(self.V_shape)
+
+    def split_data(self):
+        '''
+            split the data into two parts: train and validation vector
+            choose randomly a proportion of data by train_ratio, the remaining as validation data
+        '''
         rand_inds = np.random.permutation(self.obs_num)
         train_ratio = 0.8
         self.train_num = int(self.obs_num * train_ratio)
@@ -39,25 +63,6 @@ class PMF(object):
         logging.info('observations=%s, train_ratio=%s, train_num=%s, vali_num=%s',\
                 self.obs_num, train_ratio, self.train_vector.shape[0], self.vali_vector.shape[0])
         del rand_inds
-
-        self.epsilon = 0.5; #learning rate
-        self.lamb = 0.01 #Regularization parameter
-        self.momentum = 0.8
-        self.max_epoch = 50
-        self.feat_num = 5
-
-        #uid, vid以observation里出现的uid为准, 如何划分数据也是一个问题
-        self.user_num = self.ratings_vector[:,0].max()
-        self.item_num = self.ratings_vector[:,1].max()
-
-        self.U_shape = (self.user_num, self.feat_num)
-        self.V_shape = (self.item_num, self.feat_num)
-        #U: matrix of user features, V: matrix of item features
-        self.U = 0.1 * np.random.standard_normal(self.U_shape)
-        self.V = 0.1 * np.random.standard_normal(self.V_shape)
-
-        self.U_inc = np.zeros(self.U_shape)
-        self.V_inc = np.zeros(self.V_shape)
 
     def load_data(self):
         '''
@@ -75,18 +80,14 @@ class PMF(object):
 
     def train(self):
         '''
-            the standard PMF with gradient descent
+            standard PMF with gradient descent
         '''
         #starting from 0
         user_inds = self.train_vector[:,0].astype(int) - 1
         item_inds = self.train_vector[:,1].astype(int) - 1
         ratings  = self.train_vector[:,2]
 
-
-        pre_err, cur_err = 999999999, 999999999
-
         train_start = time.time()
-
         for epoch in range(1, self.max_epoch):
 
             round_start = time.time()
@@ -96,13 +97,7 @@ class PMF(object):
             #####compute predictions####
             pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
 
-            err_f = 0.5 * (np.square(pred_out - ratings).sum() + 0.5 * self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
-
-            pre_err = cur_err
-            cur_err = err_f
-
-            #if pre_err - cur_err < 10:
-            #    break
+            err_f = 0.5 * (np.square(pred_out - ratings).sum() + self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
 
             pred_time = time.time()
             #####calculate the gradients#####
@@ -110,12 +105,11 @@ class PMF(object):
             grad_u = np.zeros(self.U_shape)
             grad_v = np.zeros(self.V_shape)
 
-
             ####update gradient
             sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
             sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
-            U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1)
-            delta_matrix = np.tile(U_V_delta, self.feat_num)
+            U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1) #|R| * 1
+            delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
             delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
             delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
             dot_time = time.time()
@@ -197,8 +191,8 @@ class PMF(object):
             cal_grad_time = time.time()
 
             #####update the U and V vectors
-            self.U -= self.epsilon * grad_u / math.sqrt(np.square(grad_u).sum())
-            self.V -= self.epsilon * grad_v / math.sqrt(np.square(grad_v).sum())
+            self.U -= self.epsilon * grad_u
+            self.V -= self.epsilon * grad_v
             round_end = time.time()
 
             logging.info('iter=%s, train error=%s, cost(gradient/round) %.1fs/%.1fs', \
