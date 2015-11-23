@@ -15,11 +15,15 @@ from logging_util import init_logger
 ratings_file = '../data/epinions/ver1_ratings_data.txt'
 trust_file = '../data/epinions/ver1_trust_data.txt'
 
+remove_sigmod = False
+
 sigmod = lambda x: 1.0/(1+pow(math.e, -x))
 sigmod_der = lambda x: pow(math.e, x) / (1 + pow(math.e, x)) ** 2
+if remove_sigmod:
+    sigmod = lambda x: x
+    sigmod_der = lambda x: 1
 sigmod_f = np.vectorize(lambda x: sigmod(x))
 sigmod_d = np.vectorize(lambda x: sigmod_der(x))
-
 
 class PMF(object):
 
@@ -35,7 +39,7 @@ class PMF(object):
         self.epsilon = 0.5; #learning rate
         self.lamb = 0.01 #Regularization parameter
         self.momentum = 0.8
-        self.max_epoch = 400 #iteration
+        self.max_epoch = 140 #iteration
         self.feat_num = 5
 
         #uid, vid以observation里出现的uid为准, 如何划分数据也是一个问题
@@ -126,66 +130,6 @@ class PMF(object):
 
             logging.info('dot/accumulate cost %.1fs/%.1fs', dot_time - pred_time, accumulate_time - dot_time)
 
-            '''
-            ##############
-            #U_mat = np.zeros((self.user_num, self.tr_num))
-            #V_mat = np.zeros((self.item_num, self.tr_num))
-            sparse_V_mat = sparse.csr_matrix(V_mat)
-            sparse_delta_V = sparse.csr_matrix(delta_V)
-            #bad practice, as U_mat is |U| * |R|, delta_U is |R| * |D|, which makes dot product so expensive
-            #when choose just 10000 observations, the time cost is "time detail: 1s/0s/49s/52s"
-            #when we use the sparse matrix, the time cost is ""
-            time1 = time.time()
-            for uid in range(int(self.user_num)):
-                U_mat[uid] = np.equal(uid, user_inds).astype(dtype=int)
-
-            time2 = time.time()
-            grad_u += np.dot(U_mat, delta_U)
-
-            time3 = time.time()
-            for vid in range(int(self.item_num)):
-                sparse_V_mat[vid] = np.equal(vid, item_inds).astype(dtype=int)
-
-            time4 = time.time()
-            grad_v = np.add(grad_v,sparse_V_mat.dot(sparse_delta_V))
-
-            time5 = time.time()
-            print 'time detail: %.1fs/%.1fs/%.1fs/%.1fs' % (time2 - time1, time3-time2, time4-time3, time5-time4)
-            ##################
-            '''
-            '''
-            ##########
-            pred_out = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))#|R| * K --> |R| * 1
-            dot_time = 0.0
-            calculus_time = 0.0
-            add_delta_time = 0.0
-            for uid, vid, r in self.train_vector:
-                uid -= 1
-                vid -= 1
-
-                dot_start = time.time()
-                u_v_dot = np.dot(self.U[uid], self.V[vid])
-                dot_end = time.time()
-                dot_time += (dot_end - dot_start)
-
-                cal_start = time.time()
-                first_der = sigmod(u_v_dot)
-                second_der = sigmod_der(u_v_dot)
-                cal_end = time.time()
-                calculus_time += (cal_end - cal_start)
-
-                add_delta_start = time.time()
-                delta = second_der * (first_der - r)
-                grad_u[uid] +=  delta * self.V[vid]
-                grad_v[vid] +=  delta * self.U[uid]
-                #grad_v[vid] += (np.dot(self.U[uid], self.V[vid]) - r) * self.U[uid]
-                add_delta_end = time.time()
-                add_delta_time += (add_delta_end - add_delta_start)
-
-            print 'cost detail: u_v_dot=%.1fs, calculus=%.1fs, add_delta=%.1fs' % (dot_time, calculus_time, add_delta_time)
-            ##########
-            '''
-
             grad_u += self.lamb * self.U
             grad_v += self.lamb * self.V
             cal_grad_time = time.time()
@@ -219,9 +163,12 @@ class PMF(object):
         rmse = math.sqrt(np.square(delta).sum() / delta.shape[0])
         logging.info('evaluations: mae=%.2f, rmse=%.2f', mae, rmse)
         logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon)
+        if remove_sigmod:
+            logging.info('***********remove sigmod functions!!!*************')
 
     def run(self):
         self.train()
+        #logging.info('without training!')
         self.predict()
         self.evaluate()
 
