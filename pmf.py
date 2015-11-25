@@ -13,33 +13,32 @@ import logging
 from logging_util import init_logger
 
 ratings_file = '../data/epinions/ver1_ratings_data.txt'
+#ratings_file = '../data/Movielens/ml-100k/u.data'
 trust_file = '../data/epinions/ver1_trust_data.txt'
 
-remove_sigmod = False
 
 sigmod = lambda x: 1.0/(1+pow(math.e, -x))
 sigmod_der = lambda x: pow(math.e, x) / (1 + pow(math.e, x)) ** 2
-if remove_sigmod:
-    sigmod = lambda x: x
-    sigmod_der = lambda x: 1
 sigmod_f = np.vectorize(lambda x: sigmod(x))
 sigmod_d = np.vectorize(lambda x: sigmod_der(x))
 
 class PMF(object):
 
-    def __init__(self):
+    def __init__(self, use_normalized_data=False):
         init_logger(log_file='log/pmf.log', log_level=logging.INFO)
         self.ratings_file = ratings_file
         self.load_data()
         self.obs_num = self.ratings_vector.shape[0]
+        self.use_normalized_data = use_normalized_data
 
-        self.generate_normalized_ratings()
+        if self.use_normalized_data:
+            self.generate_normalized_ratings()
         self.split_data()
 
-        self.epsilon = 0.5; #learning rate
+        self.epsilon = 0.001; #learning rate
         self.lamb = 0.01 #Regularization parameter
         self.momentum = 0.8
-        self.max_epoch = 140 #iteration
+        self.max_epoch = 200 #iteration
         self.feat_num = 5
 
         #uid, vid以observation里出现的uid为准, 如何划分数据也是一个问题
@@ -74,6 +73,7 @@ class PMF(object):
             make user_id and item_id start from zero
         '''
         self.ratings_vector = np.loadtxt(self.ratings_file,delimiter=' ')
+        self.ratings_vector = self.ratings_vector[:,[0,1,2]]
 
     def generate_normalized_ratings(self):
         '''
@@ -99,24 +99,36 @@ class PMF(object):
             U_V_pairwise = np.multiply(self.U[user_inds,:], self.V[item_inds,:])
 
             #####compute predictions####
-            pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
+            if self.use_normalized_data:
+                pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
+            else:
+                pred_out = U_V_pairwise.sum(axis=1)#|R| * K --> |R| * 1
+
 
             err_f = 0.5 * (np.square(pred_out - ratings).sum() + self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
 
             pred_time = time.time()
             #####calculate the gradients#####
-
             grad_u = np.zeros(self.U_shape)
             grad_v = np.zeros(self.V_shape)
 
-            ####update gradient
-            sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
-            sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
-            U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1) #|R| * 1
-            delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
-            delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
-            delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
-            dot_time = time.time()
+            if self.use_normalized_data:
+                ####update gradient
+                sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
+                sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
+                U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1) #|R| * 1
+                delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
+                delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
+                delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
+                dot_time = time.time()
+
+            else:
+                ####update gradient
+                U_V_delta = (pred_out - ratings).reshape(self.train_num, 1) #|R| * 1
+                delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
+                delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
+                delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
+                dot_time = time.time()
 
             ind = 0
             for uid, vid, r in self.train_vector:
@@ -151,7 +163,10 @@ class PMF(object):
         user_inds = self.vali_vector[:,0].astype(int) - 1
         item_inds = self.vali_vector[:,1].astype(int) - 1
 
-        self.predictions = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))
+        if self.use_normalized_data:
+            self.predictions = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))
+        else:
+            self.predictions = np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1)
 
     def evaluate(self):
         '''
@@ -161,10 +176,8 @@ class PMF(object):
         delta = self.predictions - vali_ratings
         mae = np.absolute(delta).sum() / delta.shape[0]
         rmse = math.sqrt(np.square(delta).sum() / delta.shape[0])
-        logging.info('evaluations: mae=%.2f, rmse=%.2f', mae, rmse)
-        logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon)
-        if remove_sigmod:
-            logging.info('***********remove sigmod functions!!!*************')
+        logging.info('evaluations: rating_file=%s, mae=%.2f, rmse=%.2f', ratings_file, mae, rmse)
+        logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s, normalized_data=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon, self.use_normalized_data)
 
     def run(self):
         self.train()
