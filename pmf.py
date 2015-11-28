@@ -5,7 +5,9 @@
 '''
 
 import math
+from datetime import datetime
 import time
+
 import numpy as np
 from scipy import sparse
 
@@ -13,6 +15,7 @@ import logging
 from logging_util import init_logger
 
 ratings_file = '../data/epinions/ver1_ratings_data.txt'
+#ratings_file = '../data/Douban/uir.index'
 #ratings_file = '../data/Movielens/ml-100k/u.data'
 trust_file = '../data/epinions/ver1_trust_data.txt'
 
@@ -24,21 +27,23 @@ sigmod_d = np.vectorize(lambda x: sigmod_der(x))
 
 class PMF(object):
 
-    def __init__(self, use_normalized_data=False):
+    def __init__(self, use_normalized_data=False, start_from_zero=False, learning_rate=0.001):
         init_logger(log_file='log/pmf.log', log_level=logging.INFO)
         self.ratings_file = ratings_file
         self.load_data()
         self.obs_num = self.ratings_vector.shape[0]
         self.use_normalized_data = use_normalized_data
+        self.start_from_zero = start_from_zero#数据里user_id和item_id是否从0开始，豆瓣是从0开始的
 
         if self.use_normalized_data:
             self.generate_normalized_ratings()
         self.split_data()
 
-        self.epsilon = 0.001; #learning rate
+        self.learning_rate = learning_rate
+        self.epsilon = learning_rate; #learning rate
         self.lamb = 0.01 #Regularization parameter
         self.momentum = 0.8
-        self.max_epoch = 200 #iteration
+        self.max_epoch = 1000 #iteration
         self.feat_num = 5
 
         #uid, vid以observation里出现的uid为准, 如何划分数据也是一个问题
@@ -72,7 +77,7 @@ class PMF(object):
             load triplets(user_id, movie_id, rating)
             make user_id and item_id start from zero
         '''
-        self.ratings_vector = np.loadtxt(self.ratings_file,delimiter=' ')
+        self.ratings_vector = np.loadtxt(self.ratings_file,delimiter='\t')
         self.ratings_vector = self.ratings_vector[:,[0,1,2]]
 
     def generate_normalized_ratings(self):
@@ -86,9 +91,14 @@ class PMF(object):
         '''
             standard PMF with gradient descent
         '''
-        #starting from 0
-        user_inds = self.train_vector[:,0].astype(int) - 1
-        item_inds = self.train_vector[:,1].astype(int) - 1
+        if self.start_from_zero:
+            #douban data是从0开始的下标
+            user_inds = self.train_vector[:,0].astype(int)
+            item_inds = self.train_vector[:,1].astype(int)
+        else:
+            #starting from 0
+            user_inds = self.train_vector[:,0].astype(int) - 1
+            item_inds = self.train_vector[:,1].astype(int) - 1
         ratings  = self.train_vector[:,2]
 
         train_start = time.time()
@@ -132,8 +142,9 @@ class PMF(object):
 
             ind = 0
             for uid, vid, r in self.train_vector:
-                uid -= 1
-                vid -= 1
+                if not self.start_from_zero:
+                    uid -= 1
+                    vid -= 1
                 grad_u[uid] +=  delta_U[ind]
                 grad_v[vid] +=  delta_V[ind]
                 ind += 1
@@ -151,8 +162,13 @@ class PMF(object):
             self.V -= self.epsilon * grad_v
             round_end = time.time()
 
-            logging.info('iter=%s, train error=%s, cost(gradient/round) %.1fs/%.1fs', \
-                    epoch, err_f, cal_grad_time - pred_time, round_end - round_start)
+            logging.info('iter=%s, learning_rate=%s, train error=%s, cost(gradient/round) %.1fs/%.1fs', \
+                    epoch, self.epsilon, err_f, cal_grad_time - pred_time, round_end - round_start)
+
+            if epoch % 30 == 0:
+                self.epsilon =self.learning_rate  / epoch * 10
+                self.predict()
+                self.evaluate()
 
         logging.info('training finished, cost %.2fmin', (time.time() - train_start) / 60.0)
 
@@ -160,8 +176,12 @@ class PMF(object):
         '''
             predict the rating using the dot product of U,V
         '''
-        user_inds = self.vali_vector[:,0].astype(int) - 1
-        item_inds = self.vali_vector[:,1].astype(int) - 1
+        if self.start_from_zero:
+            user_inds = self.vali_vector[:,0].astype(int)
+            item_inds = self.vali_vector[:,1].astype(int)
+        else:
+            user_inds = self.vali_vector[:,0].astype(int) - 1
+            item_inds = self.vali_vector[:,1].astype(int) - 1
 
         if self.use_normalized_data:
             self.predictions = sigmod_f(np.multiply(self.U[user_inds,:], self.V[item_inds,:]).sum(axis=1))
@@ -177,13 +197,14 @@ class PMF(object):
         mae = np.absolute(delta).sum() / delta.shape[0]
         rmse = math.sqrt(np.square(delta).sum() / delta.shape[0])
         logging.info('evaluations: rating_file=%s, mae=%.2f, rmse=%.2f', ratings_file, mae, rmse)
-        logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s, normalized_data=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon, self.use_normalized_data)
 
     def run(self):
+        logging.info('****************Experiment@%s*******************', datetime.today().strftime('%Y-%m-%d %H:%M:%S'))
+        logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s, normalized_data=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon, self.use_normalized_data)
         self.train()
-        #logging.info('without training!')
         self.predict()
         self.evaluate()
+        logging.info('****************Experiment@%s*******************', datetime.today().strftime('%Y-%m-%d %H:%M:%S'))
 
 if __name__ == '__main__':
     pmf = PMF()
