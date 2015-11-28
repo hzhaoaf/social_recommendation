@@ -7,12 +7,18 @@
 import math
 from datetime import datetime
 import time
+import signal
 
 import numpy as np
 from scipy import sparse
 
 import logging
 from logging_util import init_logger
+
+#def sigint_handler(signum, frame):
+#    print 'Stop pressing the CTRL+C!'
+#
+#signal.signal(signal.SIGINT, sigint_handler)
 
 ratings_file = '../data/epinions/ver1_ratings_data.txt'
 #ratings_file = '../data/Douban/uir.index'
@@ -29,6 +35,7 @@ class PMF(object):
 
     def __init__(self, use_normalized_data=False, start_from_zero=False, learning_rate=0.001):
         init_logger(log_file='log/pmf.log', log_level=logging.INFO)
+        self.exp_id = datetime.today().strftime('%Y%m%d%H%M%S')
         self.ratings_file = ratings_file
         self.load_data()
         self.obs_num = self.ratings_vector.shape[0]
@@ -77,7 +84,7 @@ class PMF(object):
             load triplets(user_id, movie_id, rating)
             make user_id and item_id start from zero
         '''
-        self.ratings_vector = np.loadtxt(self.ratings_file,delimiter='\t')
+        self.ratings_vector = np.loadtxt(self.ratings_file,delimiter=' ')
         self.ratings_vector = self.ratings_vector[:,[0,1,2]]
 
     def generate_normalized_ratings(self):
@@ -102,75 +109,84 @@ class PMF(object):
         ratings  = self.train_vector[:,2]
 
         train_start = time.time()
+        real_iter = 0
         for epoch in range(1, self.max_epoch):
+            try:
+                round_start = time.time()
 
-            round_start = time.time()
+                U_V_pairwise = np.multiply(self.U[user_inds,:], self.V[item_inds,:])
 
-            U_V_pairwise = np.multiply(self.U[user_inds,:], self.V[item_inds,:])
-
-            #####compute predictions####
-            if self.use_normalized_data:
-                pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
-            else:
-                pred_out = U_V_pairwise.sum(axis=1)#|R| * K --> |R| * 1
+                #####compute predictions####
+                if self.use_normalized_data:
+                    pred_out = sigmod_f(U_V_pairwise.sum(axis=1))#|R| * K --> |R| * 1
+                else:
+                    pred_out = U_V_pairwise.sum(axis=1)#|R| * K --> |R| * 1
 
 
-            err_f = 0.5 * (np.square(pred_out - ratings).sum() + self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
+                err_f = 0.5 * (np.square(pred_out - ratings).sum() + self.lamb * (np.square(self.U).sum() + np.square(self.V).sum()))
 
-            pred_time = time.time()
-            #####calculate the gradients#####
-            grad_u = np.zeros(self.U_shape)
-            grad_v = np.zeros(self.V_shape)
+                pred_time = time.time()
+                #####calculate the gradients#####
+                grad_u = np.zeros(self.U_shape)
+                grad_v = np.zeros(self.V_shape)
 
-            if self.use_normalized_data:
-                ####update gradient
-                sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
-                sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
-                U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1) #|R| * 1
-                delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
-                delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
-                delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
-                dot_time = time.time()
+                if self.use_normalized_data:
+                    ####update gradient
+                    sigmod_dot = sigmod_f(U_V_pairwise.sum(axis=1))
+                    sigmod_der_V = sigmod_d(U_V_pairwise.sum(axis=1))
+                    U_V_delta = np.multiply(sigmod_der_V, (sigmod_dot - ratings)).reshape(self.train_num, 1) #|R| * 1
+                    delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
+                    delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
+                    delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
+                    dot_time = time.time()
 
-            else:
-                ####update gradient
-                U_V_delta = (pred_out - ratings).reshape(self.train_num, 1) #|R| * 1
-                delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
-                delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
-                delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
-                dot_time = time.time()
+                else:
+                    ####update gradient
+                    U_V_delta = (pred_out - ratings).reshape(self.train_num, 1) #|R| * 1
+                    delta_matrix = np.tile(U_V_delta, self.feat_num) # |R| * K, 这样就可以使得u_i和对应的v_j进行dot product, 可以直接使用矩阵运算
+                    delta_U = np.multiply(delta_matrix, self.V[item_inds,:])
+                    delta_V = np.multiply(delta_matrix, self.U[user_inds,:])
+                    dot_time = time.time()
 
-            ind = 0
-            for uid, vid, r in self.train_vector:
-                if not self.start_from_zero:
-                    uid -= 1
-                    vid -= 1
-                grad_u[uid] +=  delta_U[ind]
-                grad_v[vid] +=  delta_V[ind]
-                ind += 1
+                ind = 0
+                for uid, vid, r in self.train_vector:
+                    if not self.start_from_zero:
+                        uid -= 1
+                        vid -= 1
+                    grad_u[uid] +=  delta_U[ind]
+                    grad_v[vid] +=  delta_V[ind]
+                    ind += 1
 
-            accumulate_time = time.time()
+                accumulate_time = time.time()
 
-            logging.info('dot/accumulate cost %.1fs/%.1fs', dot_time - pred_time, accumulate_time - dot_time)
+                logging.info('dot/accumulate cost %.1fs/%.1fs', dot_time - pred_time, accumulate_time - dot_time)
 
-            grad_u += self.lamb * self.U
-            grad_v += self.lamb * self.V
-            cal_grad_time = time.time()
+                grad_u += self.lamb * self.U
+                grad_v += self.lamb * self.V
+                cal_grad_time = time.time()
 
-            #####update the U and V vectors
-            self.U -= self.epsilon * grad_u
-            self.V -= self.epsilon * grad_v
-            round_end = time.time()
+                #####update the U and V vectors
+                self.U -= self.epsilon * grad_u
+                self.V -= self.epsilon * grad_v
+                round_end = time.time()
 
-            logging.info('iter=%s, learning_rate=%s, train error=%s, cost(gradient/round) %.1fs/%.1fs', \
-                    epoch, self.epsilon, err_f, cal_grad_time - pred_time, round_end - round_start)
+                logging.info('iter=%s, learning_rate=%s, train error=%s, cost(gradient/round) %.1fs/%.1fs', \
+                        epoch, self.epsilon, err_f, cal_grad_time - pred_time, round_end - round_start)
 
-            if epoch % 30 == 0:
-                self.epsilon =self.learning_rate  / epoch * 10
-                self.predict()
-                self.evaluate()
+                if epoch % 50 == 0:
+                    self.epsilon =self.learning_rate  / epoch * 10
+                    self.predict()
+                    self.evaluate()
+                real_iter = epoch
+            except KeyboardInterrupt:
+                real_iter = epoch
+                break
 
         logging.info('training finished, cost %.2fmin', (time.time() - train_start) / 60.0)
+        self.predict()
+        self.evaluate()
+        logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s, normalized_data=%s', real_iter, self.feat_num, self.lamb, self.epsilon, self.use_normalized_data)
+        logging.info('****************Experiment@%s*******************', self.exp_id)
 
     def predict(self):
         '''
@@ -199,12 +215,9 @@ class PMF(object):
         logging.info('evaluations: rating_file=%s, mae=%.2f, rmse=%.2f', ratings_file, mae, rmse)
 
     def run(self):
-        logging.info('****************Experiment@%s*******************', datetime.today().strftime('%Y-%m-%d %H:%M:%S'))
+        logging.info('****************Experiment@%s*******************', self.exp_id)
         logging.info('config: iters=%s, feat=%s, regularization=%s, learning_rate=%s, normalized_data=%s', self.max_epoch, self.feat_num, self.lamb, self.epsilon, self.use_normalized_data)
         self.train()
-        self.predict()
-        self.evaluate()
-        logging.info('****************Experiment@%s*******************', datetime.today().strftime('%Y-%m-%d %H:%M:%S'))
 
 if __name__ == '__main__':
     pmf = PMF()
