@@ -23,6 +23,8 @@ import stat
 import logging
 import logging.handlers as handlers
 
+logger = None
+
 class SizedTimedRotatingFileHandler(handlers.TimedRotatingFileHandler):
     """
     Handler for logging to a set of files, which switches from one file
@@ -89,7 +91,7 @@ def init_logger(logger_name='', log_file='', log_level='', print_console=False):
     error_handler.setLevel(logging.ERROR)
 
     # create a logging format
-    formatter = logging.Formatter('%(asctime)s-%(message)s')
+    formatter = logging.Formatter('%(asctime)s-%(name)s-%(message)s')
     handler.setFormatter(formatter)
     error_handler.setFormatter(formatter)
 
@@ -111,8 +113,8 @@ def init_logger(logger_name='', log_file='', log_level='', print_console=False):
 
 if __name__ == '__main__':
     #demo_SizedTimedRotatingFileHandler()
-    #logger = init_logger('test.log', logging.INFO)
-    #logger.info('Hello baby')
+    logger = init_logger(logger_name='test', log_file='log/test.log', log_level=logging.INFO, print_console=True)
+    logger.info('Hello baby')
     #logger.error('Hello, I am an error!')
     #logger.critical('Hello, I am a critical!')
-    logger.warn('Hello, I am a warning!')
+    #logging.warn('Hello, I am a warning!')
