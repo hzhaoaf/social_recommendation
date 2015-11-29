@@ -174,7 +174,8 @@ class PMF(object):
                         epoch, self.epsilon, err_f, cal_grad_time - pred_time, round_end - round_start)
 
                 if epoch % 50 == 0:
-                    self.epsilon =self.learning_rate  / epoch * 10
+                    self.epsilon =self.learning_rate  / epoch * 20
+                if epoch % 10 == 0:
                     self.predict()
                     self.evaluate()
                 real_iter = epoch
@@ -208,7 +209,14 @@ class PMF(object):
         '''
             calculate the RMSE&MAE
         '''
+        rand_inds = np.random.permutation(len(self.predictions))
+        sample_ids = rand_inds[:100]
         vali_ratings = self.vali_vector[:,2]
+        samples = [(round(self.predictions[r],1), vali_ratings[r]) for r in sample_ids]
+        logging.info('prediction samples: %s', samples)
+        #大于5小于1改成1，5
+        self.predictions[self.predictions > 5.0] = 5.0
+        self.predictions[self.predictions < 1.0] = 1.0
         delta = self.predictions - vali_ratings
         mae = np.absolute(delta).sum() / delta.shape[0]
         rmse = math.sqrt(np.square(delta).sum() / delta.shape[0])
